@@ -1,0 +1,9 @@
+ultralytics>=8.1.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+jinja2>=3.1.2
+pydantic>=2.0.0
+pytest>=7.4.0
+lap>=0.5.12

@@ -1,0 +1,29 @@
+# Virtual environment
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Large ML weights & OCR cache
+*.pt
+*.pth
+*.onnx
+.EasyOCR/
+
+# Uploaded videos & local media
+backend/app/uploads/*
+!backend/app/uploads/.gitkeep
+*.mp4
+*.avi
+*.mov
+
+# Environment & secrets
+.env
+*.env
+
+# IDE & OS files
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
