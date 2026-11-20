@@ -27,3 +27,6 @@ backend/app/uploads/*
 .idea/
 Thumbs.db
 .DS_Store
+
+backend/app/evidence/*
+!backend/app/evidence/.gitkeep

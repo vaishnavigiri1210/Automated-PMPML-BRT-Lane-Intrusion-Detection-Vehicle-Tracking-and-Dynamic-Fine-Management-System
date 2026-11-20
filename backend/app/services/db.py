@@ -166,6 +166,16 @@ def load_total_violations_count_from_db() -> int:
         return 0
 
 
+def load_total_sms_count_from_db() -> int:
+    """Return total SMS alert count stored in PostgreSQL."""
+    try:
+        with SessionLocal() as db:
+            count = db.execute(select(func.count(SMSLogRecord.id))).scalar()
+            return int(count or 0)
+    except Exception:
+        return 0
+
+
 def load_recent_sms_from_db(limit: int = 20) -> List[Dict[str, Any]]:
     """Fetch latest SMS logs from PostgreSQL."""
     try:

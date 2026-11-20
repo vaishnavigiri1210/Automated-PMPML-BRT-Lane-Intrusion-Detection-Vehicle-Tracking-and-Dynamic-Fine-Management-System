@@ -1,15 +1,16 @@
 """FastAPI application: dynamic video upload, real-time AI inference, and live streaming."""
 from datetime import datetime, timezone
 import logging
+from pathlib import Path
 import shutil
 import time
-from pathlib import Path
 from typing import Dict, Generator, List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
 from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from ultralytics import YOLO
@@ -22,6 +23,7 @@ from app.services.db import (
     init_db,
     load_recent_sms_from_db,
     load_recent_violations_from_db,
+    load_total_sms_count_from_db,
     load_total_violations_count_from_db,
     save_sms_log_to_db,
     save_violation_to_db,
@@ -38,12 +40,15 @@ logger = logging.getLogger("brts.main")
 
 app = FastAPI(title="Pune BRTS Real-Time Surveillance Engine")
 
-# Setup template and upload directories
+# Setup template, upload, and evidence snapshot directories
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parents[1]
 UPLOAD_DIR = BASE_DIR / "uploads"
+EVIDENCE_DIR = BASE_DIR / "evidence"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
 
+app.mount("/evidence", StaticFiles(directory=str(EVIDENCE_DIR)), name="evidence")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 # Initialize PostgreSQL tables on startup
@@ -58,8 +63,8 @@ sms_service = SMSNotificationService()
 recent_sms_logs: List[dict] = load_recent_sms_from_db(limit=20) if DB_AVAILABLE else []
 last_ground_points: Dict[int, Point] = {}
 last_ocr_timestamps: Dict[int, float] = {}
+evidence_by_event: Dict[str, str] = {}
 
-# External/registry lookup for resolved owner mobile numbers
 MOCK_OWNER_PHONES: Dict[str, str] = {
     "MH12AB1234": "+919823011111",
     "MH14CD5678": "+919823022222",
@@ -68,7 +73,6 @@ MOCK_OWNER_PHONES: Dict[str, str] = {
     "MH12IJ7890": "+919823055555",
 }
 
-# Current active video source (defaults to video_1.mp4 in project root, or webcam 0)
 default_video = PROJECT_ROOT / "video_1.mp4"
 CURRENT_VIDEO_SOURCE: Union[str, int] = str(default_video) if default_video.exists() else 0
 STREAM_SESSION_ID: int = 1
@@ -102,6 +106,41 @@ def run_throttled_ocr(
 
     last_ocr_timestamps[track_id] = now
     return plate_reader.read_plate(frame=frame, bbox=bbox)
+
+
+def capture_evidence_snapshot(
+    frame: np.ndarray,
+    bbox: Tuple[float, float, float, float],
+    event_id: str,
+    plate_number: str,
+    distance_m: float,
+    stage: int,
+) -> Optional[str]:
+    """Save an annotated evidence JPEG for a confirmed violation and return its public URL."""
+    try:
+        annotated = frame.copy()
+        x1, y1, x2, y2 = [int(v) for v in bbox]
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 0, 255), 3)
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        caption = f"CHALLAN #{event_id} | {plate_number} | Stage {stage} ({distance_m:.0f}m) | {stamp}"
+        cv2.putText(
+            annotated,
+            caption,
+            (12, max(24, annotated.shape[0] - 14)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (255, 255, 255),
+            2,
+        )
+        filename = f"{event_id}_stage{stage}.jpg"
+        out_path = EVIDENCE_DIR / filename
+        cv2.imwrite(str(out_path), annotated)
+        url_path = f"/evidence/{filename}"
+        evidence_by_event[event_id] = url_path
+        return url_path
+    except Exception as exc:
+        logger.warning("Evidence snapshot capture failed for %s: %s", event_id, exc)
+        return None
 
 
 def record_sms_log(
@@ -231,13 +270,11 @@ def generate_live_stream() -> Generator[bytes, None, None]:
     cap = cv2.VideoCapture(CURRENT_VIDEO_SOURCE)
 
     while True:
-        # Exit generator loop if the active video stream was replaced
         if local_session != STREAM_SESSION_ID:
             break
 
         ret, frame = cap.read()
         if not ret:
-            # Loop recorded video files continuously for ongoing monitoring
             if isinstance(CURRENT_VIDEO_SOURCE, str):
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 ret, frame = cap.read()
@@ -248,7 +285,6 @@ def generate_live_stream() -> Generator[bytes, None, None]:
 
         h, w = frame.shape[:2]
 
-        # Dynamically scale the dedicated BRT corridor polygon to frame dimensions
         brt_polygon = [
             (int(w * 0.15), int(h * 0.95)),
             (int(w * 0.35), int(h * 0.35)),
@@ -256,25 +292,23 @@ def generate_live_stream() -> Generator[bytes, None, None]:
             (int(w * 0.85), int(h * 0.95)),
         ]
 
-        # Run YOLOv8 detection and ByteTrack multi-object tracking
         results = model.track(
             source=frame,
             persist=True,
             tracker="bytetrack.yaml",
-            classes=[2, 3, 5, 7],  # Car (2), Motorcycle (3), Bus (5), Truck (7)
+            classes=[2, 3, 5, 7],
             verbose=False,
         )
 
-        # Draw dedicated BRT lane corridor boundary in transit blue
         poly_pts = np.array(brt_polygon, np.int32).reshape((-1, 1, 2))
-        cv2.polylines(frame, [poly_pts], isClosed=True, color=(255, 120, 0), thickness=2)
+        cv2.polylines(frame, [poly_pts], isClosed=True, color=(255, 140, 0), thickness=2)
         cv2.putText(
             frame,
             "BRT DEDICATED LANE",
             (int(w * 0.2), int(h * 0.4)),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
-            (255, 120, 0),
+            (255, 140, 0),
             2,
         )
 
@@ -291,7 +325,6 @@ def generate_live_stream() -> Generator[bytes, None, None]:
                 bbox = (float(box[0]), float(box[1]), float(box[2]), float(box[3]))
                 pt = ground_point(bbox)
 
-                # Estimate per-frame corridor displacement from previous ground point
                 prev_pt: Optional[Point] = last_ground_points.get(tid)
                 step_m = estimate_step_distance_m(
                     prev_point=prev_pt,
@@ -301,7 +334,6 @@ def generate_live_stream() -> Generator[bytes, None, None]:
                 )
                 last_ground_points[tid] = pt
 
-                # Verify whether tire contact point lies inside the BRT corridor
                 in_lane = point_in_polygon(pt, brt_polygon)
                 auth = classify_authorization(category, float(conf), min_conf=0.30)
 
@@ -321,7 +353,6 @@ def generate_live_stream() -> Generator[bytes, None, None]:
                         step_distance_m=step_m,
                     )
 
-                    # Step 1: Send immediate exit warning SMS as soon as plate is read inside BRT lane
                     if in_lane and active_intrusion is not None:
                         dispatch_entry_warning_sms(
                             track_id=tid,
@@ -329,8 +360,19 @@ def generate_live_stream() -> Generator[bytes, None, None]:
                             distance_m=active_intrusion.distance_m,
                         )
 
-                    # Step 2: Issue fine and stage SMS only after crossing >= 250m
                     if in_lane and violation is not None:
+                        if not violation.evidence_path:
+                            snap_url = capture_evidence_snapshot(
+                                frame=frame,
+                                bbox=bbox,
+                                event_id=violation.event_id,
+                                plate_number=violation.plate_number,
+                                distance_m=violation.distance_m,
+                                stage=violation.stage,
+                            )
+                            if snap_url:
+                                violation.evidence_path = snap_url
+
                         save_violation_to_db(
                             {
                                 "event_id": violation.event_id,
@@ -356,20 +398,19 @@ def generate_live_stream() -> Generator[bytes, None, None]:
                             interest_inr=violation.interest_amount,
                         )
 
-                # Render bounding box and status label on frame
                 plate_tag = tracker_state.track_plates.get(tid)
                 dist_now = tracker_state.distance_traveled_m.get(tid, 0.0)
                 if in_lane and auth == AuthStatus.PRIVATE:
                     if dist_now >= penalty_policy.stage1_distance_m:
-                        box_color = (0, 0, 255)  # Red: Fine threshold (>=250m) crossed
+                        box_color = (0, 0, 255)
                         label = f"! FINE ! ID:{tid} {category.upper()} ({int(dist_now)}m)"
                     else:
-                        box_color = (0, 165, 255)  # Amber: Entry warning window (<250m)
+                        box_color = (0, 165, 255)
                         label = f"WARNING ID:{tid} {category.upper()} ({int(dist_now)}m)"
                     if plate_tag:
                         label += f" [{plate_tag}]"
                 else:
-                    box_color = (0, 255, 0)  # Green: Permitted or outside lane
+                    box_color = (0, 255, 0)
                     label = f"ID:{tid} {category}"
 
                 cv2.rectangle(
@@ -390,7 +431,6 @@ def generate_live_stream() -> Generator[bytes, None, None]:
                     2,
                 )
 
-        # Render live camera status header overlay
         cv2.putText(
             frame,
             "LIVE BRTS SURVEILLANCE FEED",
@@ -401,7 +441,6 @@ def generate_live_stream() -> Generator[bytes, None, None]:
             2,
         )
 
-        # Encode frame as JPEG and yield as an MJPEG multipart chunk
         _, buffer = cv2.imencode(".jpg", frame)
         frame_bytes = buffer.tobytes()
         yield (
@@ -498,38 +537,59 @@ def trigger_test_sms(req: TestSMSRequest):
     return {"status": "sent", "sms": entry}
 
 
+def _attach_evidence_url(row: dict) -> dict:
+    """Attach evidence snapshot URL if a matching snapshot exists on disk."""
+    eid = row.get("event_id")
+    if eid and eid in evidence_by_event:
+        row["evidence_url"] = evidence_by_event[eid]
+        return row
+    if eid:
+        matches = sorted(EVIDENCE_DIR.glob(f"{eid}_stage*.jpg"), reverse=True)
+        if matches:
+            url = f"/evidence/{matches[0].name}"
+            evidence_by_event[eid] = url
+            row["evidence_url"] = url
+    return row
+
+
 @app.get("/api/violations")
 def get_violations():
     """Return live violations (only >= 250m) and dispatched SMS logs."""
     db_violations = load_recent_violations_from_db(limit=10) if DB_AVAILABLE else []
     db_sms = load_recent_sms_from_db(limit=20) if DB_AVAILABLE else []
+    total_sms_sent = load_total_sms_count_from_db() if DB_AVAILABLE else len(recent_sms_logs)
 
     if db_violations:
+        enriched = [_attach_evidence_url(dict(r)) for r in db_violations]
         return {
             "total_violations": load_total_violations_count_from_db(),
-            "recent_violations": db_violations,
+            "total_sms_sent": total_sms_sent,
+            "recent_violations": enriched,
             "sms_logs": db_sms if db_sms else recent_sms_logs[:20],
         }
 
     serialized_violations = [
-        {
-            "event_id": v.event_id,
-            "track_id": v.track_id,
-            "category": v.category,
-            "plate_number": v.plate_number,
-            "plate_confidence": v.plate_confidence,
-            "timestamp": v.timestamp,
-            "distance_m": v.distance_m,
-            "stage": v.stage,
-            "fine_amount": v.fine_amount,
-            "interest_amount": v.interest_amount,
-            "total_fine": v.total_fine,
-            "status": v.status,
-        }
+        _attach_evidence_url(
+            {
+                "event_id": v.event_id,
+                "track_id": v.track_id,
+                "category": v.category,
+                "plate_number": v.plate_number,
+                "plate_confidence": v.plate_confidence,
+                "timestamp": v.timestamp,
+                "distance_m": v.distance_m,
+                "stage": v.stage,
+                "fine_amount": v.fine_amount,
+                "interest_amount": v.interest_amount,
+                "total_fine": v.total_fine,
+                "status": v.status,
+            }
+        )
         for v in tracker_state.violations[:10]
     ]
     return {
         "total_violations": len(tracker_state.violations),
+        "total_sms_sent": total_sms_sent,
         "recent_violations": serialized_violations,
         "sms_logs": db_sms if db_sms else recent_sms_logs[:20],
     }
@@ -554,17 +614,23 @@ def download_challan_pdf(event_id: str):
                 "interest_amount": v.interest_amount,
                 "total_fine": v.total_fine,
                 "status": v.status,
+                "evidence_path": v.evidence_path,
             }
             break
 
     if target is None and DB_AVAILABLE:
         for row in load_recent_violations_from_db(limit=100):
             if row.get("event_id") == event_id:
-                target = row
+                target = dict(row)
                 break
 
     if target is None:
         return JSONResponse({"error": "Violation event not found"}, status_code=404)
+
+    if not target.get("evidence_path"):
+        matches = sorted(EVIDENCE_DIR.glob(f"{event_id}_stage*.jpg"), reverse=True)
+        if matches:
+            target["evidence_path"] = str(matches[0])
 
     pdf_bytes = generate_challan_pdf_bytes(target)
     return Response(

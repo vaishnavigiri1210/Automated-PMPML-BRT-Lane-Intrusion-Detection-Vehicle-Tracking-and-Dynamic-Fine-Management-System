@@ -31,6 +31,7 @@ class LiveViolation:
     interest_amount: int = 0
     plate_confidence: float = 0.0
     status: str = "CONFIRMED_VIOLATION"
+    evidence_path: Optional[str] = None
 
     @property
     def total_fine(self) -> int:
@@ -121,7 +122,6 @@ class RealtimeTracker:
 
         stage_info = self._compute_stage_and_fine(updated_distance)
         if stage_info is None:
-            # Below 250m: active entry warning window only, no monetary fine yet
             return active, None
 
         stage, fine_inr, interest_inr = stage_info
@@ -148,7 +148,8 @@ class RealtimeTracker:
         existing = self.violations_by_track.get(track_id)
         if existing is not None:
             existing.distance_m = round(updated_distance, 1)
-            existing.plate_number = plate
+            if plate != "UNREADABLE":
+                existing.plate_number = plate
             existing.plate_confidence = round(conf_val, 2)
             if stage > existing.stage or (stage == 3 and interest_inr != existing.interest_amount):
                 existing.stage = stage
