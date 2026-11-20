@@ -40,9 +40,13 @@ EasyOCR ANPR + Cumulative Corridor Distance Estimator
                    ┌──────────────────┼──────────────────┐
                    ▼                  ▼                  ▼
            PostgreSQL DB      Twilio / Sim SMS    SHA-256 PDF E-Challan
+```
+
+---
 
 ## Project Structure
 
+```text
 ├── backend/
 │   └── app/
 │       ├── main.py                  # FastAPI server, MJPEG stream & REST APIs
@@ -59,39 +63,42 @@ EasyOCR ANPR + Cumulative Corridor Distance Estimator
 │           └── index.html           # Live PMPML BRTS monitoring dashboard
 ├── requirements.txt
 └── .gitignore
+```
 
 ---
 
 ## Quick Start
 
-1. Clone & Setup Virtual Environment
-PowerShell
+### 1. Clone & Setup Virtual Environment
+```powershell
 git clone [https://github.com/vaishnavigiri1210/Automated-PMPML---BRT-Lane-Intrusion-Detection-Vehicle-Tracking-and-Dynamic-Fine-Management-System.git](https://github.com/vaishnavigiri1210/Automated-PMPML---BRT-Lane-Intrusion-Detection-Vehicle-Tracking-and-Dynamic-Fine-Management-System.git)
 cd Automated-PMPML---BRT-Lane-Intrusion-Detection-Vehicle-Tracking-and-Dynamic-Fine-Management-System
 
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-2. Configure PostgreSQL Database
-Create a PostgreSQL database named brts_db:
+```
 
-SQL
+### 2. Configure PostgreSQL Database
+Create a PostgreSQL database named `brts_db`:
+```sql
 CREATE DATABASE brts_db;
-(Default connection string in db.py: postgresql+psycopg2://postgres:1234@127.0.0.1:5432/brts_db, configurable via DATABASE_URL environment variable.)
+```
+*(Default connection string in `db.py`: `postgresql+psycopg2://postgres:1234@127.0.0.1:5432/brts_db`, configurable via `DATABASE_URL` environment variable.)*
 
-3. Run the FastAPI Server
-PowerShell
+### 3. Run the FastAPI Server
+```powershell
 cd backend
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-Open http://127.0.0.1:8000 in your browser to access the dashboard.
+```
+Open **`http://127.0.0.1:8000`** in your browser to access the dashboard.
 
-Tech Stack
-Backend: Python, FastAPI, Uvicorn, OpenCV
+---
 
-Computer Vision & OCR: Ultralytics YOLOv8, ByteTrack, EasyOCR, PyTorch
+## Tech Stack
 
-Database: PostgreSQL, SQLAlchemy, Psycopg2
-
-Reporting & Alerts: ReportLab (PDF), SHA-256 Hashing, Twilio / Simulated SMS Gateway
-
-Frontend: HTML5, Tailwind CSS, Vanilla JavaScript
+- **Backend:** Python, FastAPI, Uvicorn, OpenCV
+- **Computer Vision & OCR:** Ultralytics YOLOv8, ByteTrack, EasyOCR, PyTorch
+- **Database:** PostgreSQL, SQLAlchemy, Psycopg2
+- **Reporting & Alerts:** ReportLab (PDF), SHA-256 Hashing, Twilio / Simulated SMS Gateway
+- **Frontend:** HTML5, Tailwind CSS, Vanilla JavaScript
