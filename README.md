@@ -60,7 +60,7 @@ EasyOCR ANPR + Cumulative Corridor Distance Estimator
 ├── requirements.txt
 └── .gitignore
 
-Quick Start
+## Quick Start
 
 1. Clone & Setup Virtual Environment
 PowerShell
